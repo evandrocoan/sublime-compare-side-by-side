@@ -259,6 +259,12 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 		linesA = view1_contents.splitlines( False )
 		linesB = view2_contents.splitlines( False )
 		
+		if sbs_settings().has( 'ignore_pattern' ):
+			ignore_pattern = sbs_settings().get( 'ignore_pattern' )
+			pattern = re.compile(ignore_pattern, re.MULTILINE)
+			view1_contents = pattern.sub( '', view1_contents )
+			view2_contents = pattern.sub( '', view2_contents )
+		
 		if sbs_settings().get( 'ignore_whitespace', False ):
 			view1_contents = re.sub( r'[ \t]', '', view1_contents )
 			view2_contents = re.sub( r'[ \t]', '', view2_contents )
@@ -286,6 +292,19 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 		intraLineA = ''
 		intraLineB = ''
 		hasIntraline = False
+
+		'''
+		An "intraline" difference is always a '-' line, possibly followed by
+		'?' line, and immediately followed by a '+' line; the next line after
+		that '+' might be another '?' line as well, or not. This is all
+		dependent on whether the new file line (view2's) added, removed, or
+		just changed characters relative to the original. If the new file line
+		has more characters but no other differences, then the diff sequence
+		would be '-', '+', '?'; if the new file has fewer characters but no
+		other differences, the sequence will be '-', '?', '+'; if the new file
+		has other character differences relative to the original, then the
+		sequence will be '-', '?', '+', '?'.
+		'''
 			
 		lineNum = 0
 		lineA = 0
@@ -300,6 +319,8 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 				highlightA.append( lineNum - 1 )
 				intraLineA = linesA[lineA]
 				hasDiffA = True
+				hasDiffB = False
+				hasIntraline = False
 				lineA += 1
 			elif code == '+ ':
 				bufferA.append( '' )
@@ -313,6 +334,7 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 				bufferB.append( linesB[lineB] )
 				hasDiffA = False
 				hasDiffB = False
+				hasIntraline = False
 				lineA += 1
 				lineB += 1
 			elif code == '? ':
@@ -323,24 +345,30 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 				
 			if hasIntraline and hasDiffA and hasDiffB:		
 				if sbs_settings().get( 'enable_intraline', True ):
+					# fixup line alignment
+					assert bufferA[-1] == ''
+					assert bufferB[-2] == ''
+					bufferB[-1] = bufferB.pop()
+					bufferA.pop()
+					highlightB[-1] = highlightA[-1]
+					lineNum -= 1
+					assert highlightB[-1] == lineNum - 1
+
 					s = difflib.SequenceMatcher( None, intraLineA, intraLineB )
 					for tag, i1, i2, j1, j2 in s.get_opcodes():
 						if tag != 'equal': # == replace
-							lnA = lineNum-2
-							lnB = lineNum-1
-							
 							if sbs_settings().get( 'intraline_emptyspace', False ):
 								if tag == 'insert':
 									i2 += j2 - j1
 								if tag == 'delete':
 									j2 += i2 - i1
 							
-							subHighlightA.append( [ lnA, i1, i2 ] )
-							subHighlightB.append( [ lnB, j1, j2 ] )
+							subHighlightA.append( [ lineNum - 1, i1, i2 ] )
+							subHighlightB.append( [ lineNum - 1, j1, j2 ] )
 				hasDiffA = False
 				hasDiffB = False
 				hasIntraline = False
-									
+
 						
 		window = sublime.active_window()
 		
@@ -360,7 +388,7 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			self.sub_highlight_lines( view1, subHighlightA, 'A' )
 			self.sub_highlight_lines( view2, subHighlightB, 'B' )
 			
-			numIntra = len( subHighlightA ) + len( subHighlightB )
+			numIntra = len( subHighlightB )
 			intraDiff =  str( numIntra ) + ' intra-line modifications\n'
 		
 		if sbs_settings().get( 'line_count_popup', False ):
@@ -399,12 +427,26 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 				new_window.run_command( 'toggle_side_bar' )
 			if sbs_settings().get( 'toggle_menu', False ):
 				new_window.run_command( 'toggle_menu' )
+
+			if int( sublime.version() ) >= 3000:
+				if sbs_settings().get( 'hide_sidebar', False ):
+					new_window.set_sidebar_visible(False)
+				if sbs_settings().get( 'hide_menu', False ):
+					new_window.set_menu_visible(False)
+				if sbs_settings().get( 'hide_minimap', False ):
+					new_window.set_minimap_visible(False)
+				if sbs_settings().get( 'hide_status_bar', False ):
+					new_window.set_status_bar_visible(False)
+				if sbs_settings().get( 'hide_tabs', False ):
+					new_window.set_tabs_visible(False)
 			
 			# view 1
 			new_window.run_command( 'new_file' )
 			new_window.run_command( 'insert_view', { 'string': view1_contents } )
 			new_window.active_view().set_syntax_file( view1_syntax )
 			
+			view_prefix = sbs_settings().get( 'display_prefix', '' )
+
 			view1_name = 'untitled'
 			if active_view.file_name():
 				view1_name = active_view.file_name()
@@ -412,7 +454,7 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 				view1_name = active_view.name()
 			if name1_override != False:
 				view1_name = name1_override
-			new_window.active_view().set_name( os.path.basename( view1_name ) + ' (active)' )
+			new_window.active_view().set_name( view_prefix + os.path.basename( view1_name ) + ' (active)' )
 				
 			new_window.active_view().set_scratch( True )	
 			view1 = new_window.active_view()
@@ -421,7 +463,7 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			new_window.run_command( 'new_file' )
 			new_window.run_command( 'insert_view', { 'string': view2_contents } )
 			new_window.active_view().set_syntax_file( view2_syntax )
-			new_window.active_view().set_name( os.path.basename( name2_override ) + ' (other)' )
+			new_window.active_view().set_name( view_prefix + os.path.basename( name2_override ) + ' (other)' )
 			
 			# move view 2 to group 2
 			new_window.set_view_index( new_window.active_view(), 1, 0 )
