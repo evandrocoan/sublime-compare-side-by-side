@@ -1,3 +1,13 @@
 [
-
+    { "caption": "-", "id": "3_row" },
+    {
+        "caption": "Compare With...",
+        "id": "4_row",
+        "children":
+        [
+            { "caption": "-", "id": "1_row" },
+            { "caption": "-", "id": "2_row" },
+            { "caption": "Synced Scrolling Diff", "command": "sbs_compare" },
+        ]
+    },
 ]
