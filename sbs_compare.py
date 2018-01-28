@@ -1,9 +1,27 @@
+# coding: utf8
+
 import os
 import re
 import difflib
+import json
 
 import sublime
 import sublime_plugin
+
+
+def plugin_loaded():
+	# creating these files before they're needed avoids some weird issues
+	# where sublime insists the file does't exist, when it definitely does
+
+	folder = os.path.join( sublime.packages_path(), 'User' )
+	if not os.path.exists( folder ):
+		os.makedirs( folder )
+	
+	with open( os.path.join( folder, 'SBSCompareTheme.tmTheme' ), 'w', encoding='utf-8' ) as f:
+		f.write( '' )
+
+	with open( os.path.join( folder, 'SBSCompareScheme.sublime-color-scheme' ), 'w', encoding='utf-8' ) as f:
+		f.write( '' )
 
 
 def sbs_settings():
@@ -58,11 +76,12 @@ class SbsLayoutPreserver( sublime_plugin.EventListener ):
 					sublime.active_window().run_command( 'new_window' )
 					win = sublime.active_window()
 					
-					# attempt to restore sidebar and menu visibility
-					if sbs_settings().get( 'toggle_sidebar', False ):
-						win.run_command( 'toggle_side_bar' )
-					if sbs_settings().get( 'toggle_menu', False ):
-						win.run_command( 'toggle_menu' )
+					# attempt to restore sidebar and menu visibility on ST2
+					if int( sublime.version() ) < 3000:
+						if sbs_settings().get( 'hide_sidebar', False ):
+							win.run_command( 'toggle_side_bar' )
+						if sbs_settings().get( 'hide_menu', False ):
+							win.run_command( 'toggle_menu' )
 					
 					# reopen last file
 					if last_file is not None:
@@ -71,86 +90,6 @@ class SbsLayoutPreserver( sublime_plugin.EventListener ):
 					sublime.set_timeout( lambda: win.show_quick_panel( [ 'Please close all comparison windows first' ], None ), 10 )
 					
 			sublime.set_timeout( after_close, 100 )
-			
-			
-def generate_colour_scheme( view, generate=True ):
-	# make sure we have hex AND we're >= ST3 (load_resource doesn't work in ST2)	
-	colour_removed = sbs_settings().get( 'remove_colour', 'invalid.illegal' )
-	colour_added = sbs_settings().get( 'add_colour', 'string' )
-	colour_modified_deletion = sbs_settings().get( 'modified_colour_deletion', 'support.class' )
-	colour_modified_addition = sbs_settings().get( 'modified_colour_addition', 'support.class' )
-	colour_text = sbs_settings().get( 'text_colour', '' )
-	
-	notHex = False
-	for col in [ colour_removed, colour_added, colour_modified_deletion, colour_modified_addition ]:
-		if not '#' in col:
-			notHex = True
-	
-	if int( sublime.version() ) < 3000 or notHex:
-		return { 'removed': colour_removed, 'added': colour_added, 'modified_deletion': colour_modified_deletion, 'modified_addition': colour_modified_addition }
-	
-	
-	# generate theme strings
-	colourStrings = {}
-	colourHexes = {}
-	for col in [ [ 'removed', colour_removed ], [ 'added', colour_added ], [ 'modified_deletion', colour_modified_deletion ], [ 'modified_addition', colour_modified_addition ] ]:
-		colourStrings[ col[0] ] = 'comparison.' + col[0]
-		colourHexes[ col[0] ] = col[1]
-	
-	# relative for settings, absolute for writing to file
-	# forwardSlashesOnly brought to you by Windows
-	def theme_file( abs, folderOnly=False, forwardSlashesOnly=False ):
-		package_dir = os.path.basename( sublime.packages_path() )
-		if abs:
-			package_dir = sublime.packages_path()
-			
-		folder = os.path.join( package_dir, 'User' )
-		if forwardSlashesOnly:
-			folder = folder.replace( '\\', '/' )
-		if folderOnly:
-			return folder
-			
-		file = os.path.join( folder, 'SBSCompare.tmTheme' )
-		if forwardSlashesOnly:
-			file = file.replace( '\\', '/' )
-		return file
-	
-	# generate modified theme
-	if generate:		
-		# loop through colours and generate their xml
-		xml = ''
-		xml_tmpl = '<dict><key>name</key><string>{}</string><key>scope</key><string>{}</string><key>settings</key><dict><key>background</key><string>{}</string><key>foreground</key><string>{}</string></dict></dict>'
-		
-		for name in colourStrings:
-			string = colourStrings[name]
-			chex = colourHexes[name]
-			xml += xml_tmpl.format( 'Comparison ' + name, string, chex, colour_text )
-			
-		# get current scheme xml
-		current_scheme = view.settings().get( 'color_scheme' )  # no 'u' >:(
-		try:
-			scheme = sublime.load_resource( current_scheme )
-		except:
-			# sometimes load_resource can fail (seemingly on OSX when upgrading from ST2->ST3)
-			# manually re-selecting the colour scheme once should fix this for good (see issue #31)
-			sublime.message_dialog( 'Could not load colour scheme.\nFalling back to a blank colour scheme.\n\nTo fix this, please manually re-select your colour scheme in\n\tPreferences > Color Scheme\n\nThis should not happen again once action has been taken.\nSorry for the inconvenience.' )
-			scheme = '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>settings</key><array></array></dict></plist>'
-		
-		# combiiiiiiiiiiiiine
-		dropzone = scheme.rfind( '</array>' )
-		data = scheme[:dropzone] + xml + scheme[dropzone:]
-		
-		if not os.path.exists( theme_file( abs=True, folderOnly=True ) ):
-			os.makedirs( theme_file( abs=True, folderOnly=True ) )
-		
-		# save new theme
-		with open( theme_file( abs=True ), 'w', encoding='utf-8' ) as f:
-			f.write( data )
-	
-	# set view to use new theme
-	view.settings().set( 'color_scheme', theme_file( abs=False, forwardSlashesOnly=True ) )
-	return colourStrings
-
 
 sbs_markedSelection = [ '', '' ]
 sbs_files = []
@@ -192,6 +131,94 @@ class SbsCompareFilesCommand( sublime_plugin.ApplicationCommand ):
 		window.run_command( 'sbs_compare' )
 
 class SbsCompareCommand( sublime_plugin.TextCommand ):			
+	def generate_colour_scheme( self, view, generate=True ):
+		# make sure we have hex AND we're >= ST3 (load_resource doesn't work in ST2)	
+		colour_removed = sbs_settings().get( 'remove_colour', 'invalid.illegal' )
+		colour_added = sbs_settings().get( 'add_colour', 'string' )
+		colour_modified_deletion = sbs_settings().get( 'modified_colour_deletion', 'support.class' )
+		colour_modified_addition = sbs_settings().get( 'modified_colour_addition', 'support.class' )
+		colour_text = sbs_settings().get( 'text_colour', '' )
+		
+		notHex = False
+		for col in [ colour_removed, colour_added, colour_modified_deletion, colour_modified_addition ]:
+			if not '#' in col:
+				notHex = True
+		
+		if int( sublime.version() ) < 3000 or notHex:
+			return { 'removed': colour_removed, 'added': colour_added, 'modified_deletion': colour_modified_deletion, 'modified_addition': colour_modified_addition }
+		
+		# generate theme strings
+		colourStrings = {}
+		colourHexes = {}
+		for col in [ [ 'removed', colour_removed ], [ 'added', colour_added ], [ 'modified_deletion', colour_modified_deletion ], [ 'modified_addition', colour_modified_addition ] ]:
+			colourStrings[ col[0] ] = 'comparison.' + col[0]
+			colourHexes[ col[0] ] = col[1]
+
+		# generate modified theme
+		if generate:
+			# load current scheme
+			current_scheme = view.settings().get( 'color_scheme' )  # no 'u' >:(
+			try:
+				scheme = sublime.load_resource( current_scheme )
+			except:
+				# sometimes load_resource can fail (seemingly on OSX when upgrading from ST2->ST3)
+				# manually re-selecting the colour scheme once should fix this for good (see issue #31)
+				sublime.message_dialog( 'Could not load colour scheme.\nFalling back to a blank colour scheme.\n\nTo fix this, please manually re-select your colour scheme in\n\tPreferences > Color Scheme\n\nThis should not happen again once action has been taken.\nSorry for the inconvenience.' )
+				scheme = '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>settings</key><array></array></dict></plist>'
+
+			# determine if scheme is using the new .sublime-color-scheme json format
+			scheme_json = False
+			try:
+				scheme = json.loads( scheme )
+				scheme_json = True
+			except:
+				scheme_json = False
+
+			# create format specific data
+			if scheme_json:
+				for name in colourStrings:
+					string = colourStrings[name]
+					chex = colourHexes[name]
+					scheme['rules'].append( { "name": name, "scope": string, "background": chex, "foreground": colour_text } )
+
+				data = json.dumps( scheme )
+			else:
+				xml = ''
+				xml_tmpl = '<dict><key>name</key><string>{}</string><key>scope</key><string>{}</string><key>settings</key><dict><key>background</key><string>{}</string><key>foreground</key><string>{}</string></dict></dict>'
+				dropzone = scheme.rfind( '</array>' )
+
+				# loop through colours and generate their xml
+				for name in colourStrings:
+					string = colourStrings[name]
+					chex = colourHexes[name]
+					xml += xml_tmpl.format( 'Comparison ' + name, string, chex, colour_text )
+
+				# combiiiiiiiiiiiiine
+				data = scheme[:dropzone] + xml + scheme[dropzone:]
+			
+			# determine theme filename
+			# relative for settings, absolute for writing to file
+			# replacing slashes for relative path necessary on windows
+			# completely separate filenames are necessary to avoid json erroneously taking precedence
+			theme_name = 'SBSCompareTheme.tmTheme'
+			if scheme_json:
+				theme_name = 'SBSCompareScheme.sublime-color-scheme'
+	
+			abs_theme_file = os.path.join( sublime.packages_path(), 'User', theme_name )
+			rel_theme_file = os.path.join( os.path.basename( sublime.packages_path() ), 'User', theme_name )
+			rel_theme_file = rel_theme_file.replace( '\\', '/' )
+			
+			# save new theme
+			with open( abs_theme_file, 'w', encoding='utf-8' ) as f:
+				f.write( data )
+
+			# save filename for later use (if we rerun this without regenerating)
+			self.last_theme_file = rel_theme_file
+		
+		# set view settings to use new theme
+		view.settings().set( 'color_scheme', self.last_theme_file )
+		return colourStrings
+
 	def get_view_contents( self, view ):
 		selection = sublime.Region( 0, view.size() )
 		content = view.substr( selection )
@@ -428,11 +455,6 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			active_window.run_command( 'new_window' )		
 			new_window = sublime.active_window()
 			new_window.set_layout( { "cols": [0.0, 0.5, 1.0], "rows": [0.0, 1.0], "cells": [[0, 0, 1, 1], [1, 0, 2, 1]] } )
-			
-			if sbs_settings().get( 'toggle_sidebar', False ):
-				new_window.run_command( 'toggle_side_bar' )
-			if sbs_settings().get( 'toggle_menu', False ):
-				new_window.run_command( 'toggle_menu' )
 
 			if int( sublime.version() ) >= 3000:
 				if sbs_settings().get( 'hide_sidebar', False ):
@@ -445,13 +467,15 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 					new_window.set_status_bar_visible(False)
 				if sbs_settings().get( 'hide_tabs', False ):
 					new_window.set_tabs_visible(False)
-			
-			# view 1
-			new_window.run_command( 'new_file' )
-			new_window.run_command( 'insert_view', { 'string': view1_contents } )
-			new_window.active_view().set_syntax_file( view1_syntax )
-			
+			else:
+				if sbs_settings().get( 'hide_sidebar', False ):
+					new_window.run_command( 'toggle_side_bar' )
+				if sbs_settings().get( 'hide_menu', False ):
+					new_window.run_command( 'toggle_menu' )
+
+			# view names
 			view_prefix = sbs_settings().get( 'display_prefix', '' )
+			view2_name = name2_override
 
 			view1_name = 'untitled'
 			if active_view.file_name():
@@ -460,7 +484,43 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 				view1_name = active_view.name()
 			if name1_override != False:
 				view1_name = name1_override
-			new_window.active_view().set_name( view_prefix + os.path.basename( view1_name ) + ' (active)' )
+
+			name1base = os.path.basename( view1_name )
+			name2base = os.path.basename( view2_name )
+			if name1base == name2base:
+				dirname1 = os.path.dirname( view1_name )
+				dirname2 = os.path.dirname( view2_name )
+
+				path_prefix = os.path.commonprefix( [ dirname1, dirname2 ] )
+				if path_prefix != '':
+					path_prefix = path_prefix.replace( '\\', '/' )
+					path_prefix = path_prefix.split( '/' )[:-1] # leave last directory in path
+					path_prefix = '/'.join( path_prefix ) + '/'
+					plen = len( path_prefix )
+					dirname1 = dirname1[plen:]
+					dirname2 = dirname2[plen:]
+
+				separator = ' - '
+				if int( sublime.version() ) >= 3000:
+					separator = ' — '
+				view1_name = name1base + separator + dirname1
+				view2_name = name2base + separator + dirname2
+
+				if dirname1 == dirname2:
+					view1_name = name1base
+					view2_name = name2base
+			else:
+				view1_name = name1base
+				view2_name = name2base
+
+			view1_name += ' (active)'
+			view2_name += ' (other)'
+			
+			# view 1
+			new_window.run_command( 'new_file' )
+			new_window.run_command( 'insert_view', { 'string': view1_contents } )
+			new_window.active_view().set_syntax_file( view1_syntax )
+			new_window.active_view().set_name( view_prefix + view1_name )
 				
 			new_window.active_view().set_scratch( True )	
 			view1 = new_window.active_view()
@@ -469,7 +529,7 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			new_window.run_command( 'new_file' )
 			new_window.run_command( 'insert_view', { 'string': view2_contents } )
 			new_window.active_view().set_syntax_file( view2_syntax )
-			new_window.active_view().set_name( view_prefix + os.path.basename( name2_override ) + ' (other)' )
+			new_window.active_view().set_name( view_prefix + view2_name )
 			
 			# move view 2 to group 2
 			new_window.set_view_index( new_window.active_view(), 1, 0 )
@@ -486,8 +546,8 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			view2.settings().set( 'word_wrap', 'false' )
 			
 			# generate and set colour scheme
-			self.colours = generate_colour_scheme( view1 )
-			generate_colour_scheme( view2, generate=False )
+			self.colours = self.generate_colour_scheme( view1 )
+			self.generate_colour_scheme( view2, generate=False )
 			
 			# run diff
 			self.compare_views( view1, view2 )
@@ -594,10 +654,10 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 				menu_items = []
 				for tab in openTabs:
 					fileName = tab[0]
-					if sbs_settings().get( 'expanded_filenames', False ):
-						menu_items.append( [ os.path.basename( fileName ), fileName ] )
+					if os.path.basename( fileName ) == fileName:
+						menu_items.append( [ os.path.basename( fileName ), '' ] )
 					else:
-						menu_items.append( os.path.basename( fileName ) )	
+						menu_items.append( [ os.path.basename( fileName ), fileName ] )
 				sublime.set_timeout( self.view.window().show_quick_panel( menu_items, on_click ) )
 
 
