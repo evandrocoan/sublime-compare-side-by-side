@@ -63,5 +63,5 @@
 	// "display_prefix": "DIFF: ",
 
 	// make the comparison output read only (recommended)
-	"read_only": true
+	"read_only": false
 }
