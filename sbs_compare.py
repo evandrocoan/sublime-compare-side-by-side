@@ -137,20 +137,22 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 		colour_added = sbs_settings().get( 'add_colour', 'string' )
 		colour_modified_deletion = sbs_settings().get( 'modified_colour_deletion', 'support.class' )
 		colour_modified_addition = sbs_settings().get( 'modified_colour_addition', 'support.class' )
+		colour_unmodified_deletion = sbs_settings().get( 'unmodified_colour_deletion', 'invalid.illegal' )
+		colour_unmodified_addition = sbs_settings().get( 'unmodified_colour_addition', 'string' )
 		colour_text = sbs_settings().get( 'text_colour', '' )
 		
 		notHex = False
-		for col in [ colour_removed, colour_added, colour_modified_deletion, colour_modified_addition ]:
+		for col in [ colour_removed, colour_added, colour_modified_deletion, colour_modified_addition, colour_unmodified_deletion, colour_unmodified_addition ]:
 			if not '#' in col:
 				notHex = True
 		
 		if int( sublime.version() ) < 3000 or notHex:
-			return { 'removed': colour_removed, 'added': colour_added, 'modified_deletion': colour_modified_deletion, 'modified_addition': colour_modified_addition }
+			return { 'removed': colour_removed, 'added': colour_added, 'modified_deletion': colour_modified_deletion, 'modified_addition': colour_modified_addition, 'unmodified_deletion': colour_unmodified_deletion, 'unmodified_addition': colour_unmodified_addition }
 		
 		# generate theme strings
 		colourStrings = {}
 		colourHexes = {}
-		for col in [ [ 'removed', colour_removed ], [ 'added', colour_added ], [ 'modified_deletion', colour_modified_deletion ], [ 'modified_addition', colour_modified_addition ] ]:
+		for col in [ [ 'removed', colour_removed ], [ 'added', colour_added ], [ 'modified_deletion', colour_modified_deletion ], [ 'modified_addition', colour_modified_addition ], [ 'unmodified_deletion', colour_unmodified_deletion ], [ 'unmodified_addition', colour_unmodified_addition ] ]:
 			colourStrings[ col[0] ] = 'comparison.' + col[0]
 			colourHexes[ col[0] ] = col[1]
 
@@ -169,7 +171,7 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			# determine if scheme is using the new .sublime-color-scheme json format
 			scheme_json = False
 			try:
-				scheme = json.loads( scheme )
+				scheme = sublime.decode_value( scheme )
 				scheme_json = True
 			except:
 				scheme_json = False
@@ -209,8 +211,11 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			rel_theme_file = rel_theme_file.replace( '\\', '/' )
 			
 			# save new theme
-			with open( abs_theme_file, 'w', encoding='utf-8' ) as f:
-				f.write( data )
+			try:
+				with open( abs_theme_file, 'w', encoding='utf-8' ) as f:
+					f.write( data )
+			except:
+				sublime.message_dialog( 'Could not write theme file.\nPlease ensure that your Sublime config directory is writeable and restart Sublime.\n\nFull path:\n' + abs_theme_file )
 
 			# save filename for later use (if we rerun this without regenerating)
 			self.last_theme_file = rel_theme_file
@@ -269,19 +274,28 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 	def sub_highlight_lines( self, view, lines, col ):
 		# intra-line diffs
 		regionList = []
+		lineRegionList = []
 		for diff in lines:
 			lineNum = diff[0]
 			start = view.text_point( lineNum, diff[1] )
 			end = view.text_point( lineNum, diff[2] )
-			
+			lineStart = view.text_point( lineNum, 0 )
+			lineEnd = view.text_point( lineNum+1, -1 )
+
 			region = sublime.Region( start, end )
 			regionList.append( region )
+			
+			lineRegion = sublime.Region( lineStart, lineEnd )
+			lineRegionList.append(lineRegion)
 		
 		colour = self.colours['modified_deletion']
+		colourUnmodified = self.colours['unmodified_deletion']
 		if col == 'B':
 			colour = self.colours['modified_addition']
+			colourUnmodified = self.colours['unmodified_addition']
 			
 		drawType = self.get_drawtype()			
+		view.add_regions( 'diff_intraline_unmodified-' + col, lineRegionList, colourUnmodified, '', drawType )
 		view.add_regions( 'diff_intraline-' + col, regionList, colour, '', drawType )
 				
 		

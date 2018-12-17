@@ -32,7 +32,10 @@
 	"add_colour": "#a3be8c",
 
 	// intraline diffs
+	"unmodified_colour_deletion": "#d5979d",
 	"modified_colour_deletion": "#7fa3c7",
+
+	"unmodified_colour_addition": "#cadabd",
 	"modified_colour_addition": "#7fa3c7",
 
 	// text colour (ST3)
@@ -51,7 +54,7 @@
 	"intraline_emptyspace": false,
 
 	// completely ignore whitespace in all diffs
-	"ignore_whitespace": false,
+	"ignore_whitespace": true,
 
 	// completely ignore case in all diffs
 	"ignore_case": false,
