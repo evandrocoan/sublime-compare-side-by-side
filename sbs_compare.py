@@ -17,12 +17,30 @@ def plugin_loaded():
 	if not os.path.exists( folder ):
 		os.makedirs( folder )
 	
-	with open( os.path.join( folder, 'SBSCompareTheme.tmTheme' ), 'w', encoding='utf-8' ) as f:
+	with open( os.path.join( folder, 'SBSCompareTheme.hidden-tmTheme' ), 'w', encoding='utf-8' ) as f:
 		f.write( '' )
 
-	with open( os.path.join( folder, 'SBSCompareScheme.sublime-color-scheme' ), 'w', encoding='utf-8' ) as f:
+	with open( os.path.join( folder, 'SBSCompareScheme.hidden-color-scheme' ), 'w', encoding='utf-8' ) as f:
 		f.write( '' )
 
+	delete_old_non_hidden_files()
+
+def delete_old_non_hidden_files():
+	# Deletes the old previous non hidden files preventing to show them up
+	# in Preferences -> Color Scheme... selection dialog. (See PR #53)
+	# Also, if those files were malformed (0 bytes, as a result of the
+	# bug fixed with PR #55) opening that dialog threw this error message:
+	# 'Error loading colour scheme Packages/User/SBSCompareTheme.tmTheme: Bad XML' 
+
+	folder = os.path.join( sublime.packages_path(), 'User' )
+
+	filePath = os.path.join( folder, 'SBSCompareTheme.tmTheme' )
+	if os.path.exists(filePath):
+		os.remove(filePath)
+
+	filePath = os.path.join( folder, 'SBSCompareScheme.sublime-color-scheme' )
+	if os.path.exists(filePath):
+		os.remove(filePath)
 
 def sbs_settings():
 	return sublime.load_settings( 'SBSCompare.sublime-settings' )
@@ -159,7 +177,7 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 		# generate modified theme
 		if generate:
 			# load current scheme
-			current_scheme = view.settings().get( 'color_scheme' )  # no 'u' >:(
+			current_scheme = self.get_current_color_scheme( view )
 			try:
 				scheme = sublime.load_resource( current_scheme )
 			except:
@@ -202,9 +220,9 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 			# relative for settings, absolute for writing to file
 			# replacing slashes for relative path necessary on windows
 			# completely separate filenames are necessary to avoid json erroneously taking precedence
-			theme_name = 'SBSCompareTheme.tmTheme'
+			theme_name = 'SBSCompareTheme.hidden-tmTheme'
 			if scheme_json:
-				theme_name = 'SBSCompareScheme.sublime-color-scheme'
+				theme_name = 'SBSCompareScheme.hidden-color-scheme'
 	
 			abs_theme_file = os.path.join( sublime.packages_path(), 'User', theme_name )
 			rel_theme_file = os.path.join( os.path.basename( sublime.packages_path() ), 'User', theme_name )
@@ -223,6 +241,21 @@ class SbsCompareCommand( sublime_plugin.TextCommand ):
 		# set view settings to use new theme
 		view.settings().set( 'color_scheme', self.last_theme_file )
 		return colourStrings
+
+	def get_current_color_scheme( self, view ):
+		current_scheme = view.settings().get( 'color_scheme' )  # no 'u' >:(
+
+		packages_path = os.path.basename( sublime.packages_path() )
+
+		# The default 'color_scheme' setting only has the file name
+		# and it's inside the 'Color Scheme - Default' package.
+		if not current_scheme.startswith(packages_path + '/'):
+			rel_current_scheme_file = os.path.join( packages_path, 'Color Scheme - Default', current_scheme )
+			rel_current_scheme_file = rel_current_scheme_file.replace( '\\', '/' )
+
+			current_scheme = rel_current_scheme_file
+
+		return current_scheme
 
 	def get_view_contents( self, view ):
 		selection = sublime.Region( 0, view.size() )
@@ -782,3 +815,35 @@ class SbsPrevDiffCommand( sublime_plugin.TextCommand ):
 class SbsNextDiffCommand( sublime_plugin.TextCommand ):
 	def run( self, edit, string='' ):
 		sbs_scroll_to( self.view )
+
+
+class SbsSelectTextCommand( sublime_plugin.TextCommand ):
+	def run( self, edit, index='' ):
+		window = self.view.window()
+
+		if index == '':
+			menu_items = [ 'Select removed text', 'Select added text' ]
+			window.show_quick_panel( menu_items, lambda i: window.run_command( 'sbs_select_text', { 'index': i } ) )
+			return
+
+		view = window.views()[index]
+		view.sel().clear()
+		regions = view.get_regions( 'diff_highlighted-A' ) + view.get_regions( 'diff_highlighted-B' ) + view.get_regions( 'diff_intraline-A' ) + view.get_regions( 'diff_intraline-B' )
+
+		combined_regions = []
+		# hacky but necessary to combine regions both start==end AND end==start
+		# there's probably a better way to do this
+		for it in range( 0, 2 ):
+			for r in regions:
+				skip = False
+				for cr in combined_regions:
+					if r.a == cr.b or r.b == cr.a:
+						cr.b = max( r.b, cr.b )
+						skip = True
+						break
+				if not skip:
+					combined_regions.append( r )
+
+		for r in combined_regions:
+			view.sel().add( r )
+
